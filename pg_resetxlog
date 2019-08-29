@@ -1,0 +1,23 @@
+
+postgresql9.2
+Options:
+-l TLI,FILE,SEG  force minimum WAL starting location for new transaction log
+-l timelineid,fileid,seg
+为新的事务日志指定最小的WAL起始位置，应该比当前存在于pg_xlog中任何一个WAL日志文件名都要大。名字以十六进制表示且分为三个部分，第一部分是时间线，一般保持该部分值不变。第三部分值不能超过255，即0xFF，如果是该值，则将第二部分加1，第三部分变为0
+-m XID     set next multitransaction ID
+安全的设置值应该是由pg_multixact/offsets下最大的文件名，然后加1，再乘以65536得出。文件名和参数都应是十六进制的格式。如果pg_multixact/offsets目录下不存在任何数据，则得出-m 0x10000
+
+pg_resetxlog -l 0x1,0x0,0x4    -x 0x000100000  -m 0x10000  -O 0x10000 –f $PGDATA
+
+
+Postgresql 9.4 up
+Options:
+-l XLOGFILE      force minimum WAL starting location for new transaction log
+-l XLOGFILE
+指定下一个xlog日志的位置
+-m MXID,MXID  set next and oldest multitransaction ID
+最新参数需要同时设置下一个事务和最老的事务ID
+pg_resetxlog -l 000000010000000000000006  -x 0x100000  -m 0x10000,0x10000   -O 0x0  $PGDATA -f
+
+参考：
+https://yq.aliyun.com/articles/59113
