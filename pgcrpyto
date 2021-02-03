@@ -1,0 +1,517 @@
+https://www.postgresql.org/docs/10/pgcrypto.html
+
+Postgresql中，pgcrypto是contrib下的一个插件，它提供了一些加密函数，可以实现服务器端的数据加密。我们可以在SQL语句中调用这些函数来完成数据的加密，比如：
+
+insert into p values(encrypt('aaaa','as','bf')，‘b’);，调用加密函数encrypt把'aaaa'加密后写入了table中。
+
+使用pgcrypto中的加密函数，可以加密比较重要的字段，提高数据的安全性。
+
+pgcrypto中提供了以下几种函数：
+
+
+
+## hash函数：用于计算输入数据的hash值
+
+**digest()**
+
+ 函数原型:
+
+```
+ digest(data text, type text) returns bytea            //hash文本类型的数据
+
+ digest(data bytea, type text) returns bytea        //hash  bytea类型的数据
+```
+
+ 参数：
+
+data：要hash的数据
+
+type: 加密算法，可取md5, sha1, sha224, sha256, sha384, sha512
+
+例如：
+
+```
+postgres=# select digest('aa','sha1');
+                   digest                   
+--------------------------------------------
+ \xe0c9035898dd52fc65c41454cec9c4d2611bfb37
+(1 row)
+
+postgres=# select digest('aa'::bytea,'sha1');
+                   digest                   
+--------------------------------------------
+ \xe0c9035898dd52fc65c41454cec9c4d2611bfb37
+(1 row)
+```
+
+可以看出，对于同一个数据，使用同样的算法时，每次hash的结果都一样。
+
+但是请注意函数参数, 如果要对bytea hash, 那么请在输入参数时指定参数类型bytea,否则该bytea将被当作text类型的字符串。
+
+例如以下两次调用分别调用了2个函数. 所以得到的结果也是不一样的.
+
+```
+postgres=# select digest('\xaa'::bytea,'sha1');
+                   digest                   
+--------------------------------------------
+ \x52538a80094f7b62948fd31e68fd17a315d8dc91
+(1 row)
+
+postgres=# select digest('\xaa','sha1');
+                   digest                   
+--------------------------------------------
+ \xadbe9dee454ef4167aff588e2a85ae3927454592
+(1 row)
+```
+
+ 
+
+
+
+### hmac()
+
+ 函数原型： 
+
+```
+hmac(data text, key text, type text) returns bytea     //hash文本类型的数据
+
+hmac(data bytea, key text, type text) returns bytea     //hash  bytea类型的数据
+```
+
+data：要hash的数据
+
+type: 加密算法，可取md5, sha1, sha224, sha256, sha384, sha512
+
+key: 秘钥
+
+这两个函数与digest类似, 只是多了一个key参数, 也就是说同一个被加密的值, 可以使用不同的key得到不同的hash值.
+
+这样的做法是, 不知道key的话, 也无法逆向破解原始值.
+
+使用hmac还有一个好处是, 使用digest如果原始值和hash值同时被别人修改了是无法知道是否被修改的.
+
+但是使用hmac, 如果原始值被修改了, 同时key没有泄漏的话, 那么hash值是无法被修改的, 因此就能够知道原始值是否被修改过.
+
+例如：
+
+```
+postgres=# select hmac('aa','key1','sha1');
+                    hmac                    
+--------------------------------------------
+ \x239eb25f1e2dca491a3ed20dea0b93ff95701e57
+(1 row)
+
+postgres=# select hmac('aa','key2','sha1');
+                    hmac                    
+--------------------------------------------
+ \x0312ab09ab9c4511322ebf41aa5bec78bb0efdf0
+(1 row)
+```
+
+如果key的长度大于blocksize(所用算法hash值的位数)，则回先对key进行hash，所得的hash值作为key
+
+以上hash函数只要原始值一致, 每次得到的hash值是一样的, 虽然hmac多了key的参数, 但是只要key和原始数据一样, 得到的hash值也是一样的. 这样的加密很可能被逆向破解掉.
+
+下面的2个函数，提高了逆向破解的难度, 增强了数据的安全性。
+
+
+
+### crypt()和gen_salt()
+
+**crypt()函数 用来计算hash值**
+
+ 函数原型：
+
+```
+crypt(data text, salt text) returns text
+```
+
+ salt：由gen_salt()生成的一个字符串，包含加密算法、散列次数等信息
+
+ **gen_salt() 为crypt()函数生成一个字符串作为算法参数**
+
+ 函数原型：
+
+```
+gen_salt(type text [, iter_count integer ]) returns text
+```
+
+ type:加密算法，可取 bf、md5、des、xdes
+
+iter_count :散列次数，数字越大加密时间越长, 被破解需要的时间也越长。
+
+iter_count 的取值范围：
+
+| 算法 | 缺省 | 最小 | 最大     |
+| ---- | ---- | ---- | -------- |
+| xdes | 725  | 1    | 16777215 |
+| bf   | 6    | 4    | 31       |
+
+对于xdes，iter_count 必须是奇数；对于md5、des，iter_count不起作用。
+
+crypt()和gen_salt()结合使用，同一个原始值, 每次得到的hash值是不一样的。例如：
+
+```
+postgres=# select crypt('123',gen_salt('bf',10));
+                            crypt                             
+--------------------------------------------------------------
+ $2a$10$HoLIt1kGt00tP482DwjRxuZmXzmj.2zOTc3C59Ga9lIsyqMsbUErC
+(1 row)
+
+postgres=# select crypt('123',gen_salt('bf',10));
+                            crypt                             
+--------------------------------------------------------------
+ $2a$10$UIr2lHZUXU2C2V4eQaDrhuIDzhGwuJ8z573foLUGCh0aQxjHSv4ba
+```
+
+原因是gen_salt每次都会给出1个随机值。gen_salt所得的字符串如下：
+
+```
+postgres=# select gen_salt('bf',10);
+           gen_salt            
+-------------------------------
+ $2a$10$k8qIUvgDXvJfIRucLOLY1.
+(1 row)
+```
+
+ $2a$10$k8qIUvgDXvJfIRucLOLY1. 
+
+2a 该字符串代表算法是bf， 10 代表散列次数为10，后面的是一个随机的字符串
+
+crypt()和gen_salt() 主要用于密码的存储和匹配，既然每次的结果不一样，那么如何匹配呢，如下：
+
+```
+postgres=# select crypt('123',gen_salt('bf',10));
+                            crypt                             
+--------------------------------------------------------------
+ $2a$10$76xcvT9pZpLL8dKn.RY3nOQXjgW1Yqo0nFBlbiIjqmQO61hE8VlZy
+(1 row)
+
+postgres=# select crypt('123','$2a$10$76xcvT9pZpLL8dKn.RY3nOQXjgW1Yqo0nFBlbiIjqmQO61hE8VlZy');
+                            crypt                             
+--------------------------------------------------------------
+ $2a$10$76xcvT9pZpLL8dKn.RY3nOQXjgW1Yqo0nFBlbiIjqmQO61hE8VlZy
+(1 row)
+```
+
+把hash值作为salt，对原来的明文进行hash计算，得到的hash值是一样的。当我们需要匹配的时候，只需要比较hash值 与 用hash值作为salt得到的结果是否一样即可。
+
+
+
+## Raw Encryption Functions：
+
+此种类型的加密函数提供了加密函数和相对的解密函数，包含如下的函数：
+
+```
+encrypt(data bytea, key bytea, type text) returns bytea
+
+decrypt(data bytea, key bytea, type text) returns bytea
+
+encrypt_iv(data bytea, key bytea, iv bytea, type text) returns bytea
+
+decrypt_iv(data bytea, key bytea, iv bytea, type text) returns bytea
+```
+
+参数：
+
+ key : 秘钥
+
+ type :加密算法 +模式（形式：bf-cbc）
+
+支持的算法和模式有：  blowfish-cbc(bf-cbc)、aes-128-cbc aes-128-ecb; 编译时，使用with-openssl选项，还可支持 blowfish-cfb、des-cbc、des-ecb、3des-cbc、3des-ecb、cast5-ecb、cast5-cbc。都是对称加密算法。
+
+ iv:   CBC、CFB模式的初始向量
+
+例如：
+
+```
+postgres=# select decrypt(encrypt('aaaaaaaaaa','key','des-ecb'),'key','des-ecb');
+  decrypt   
+------------
+ aaaaaaaaaa
+(1 row)
+postgres=# select decrypt_iv(encrypt_iv('aaaaaaaaaa','key','iv','des-cbc'),'key','iv','des-cbc');
+ decrypt_iv 
+------------
+ aaaaaaaaaa
+(1 row)
+```
+
+以上提到了对称加密算法的模式CBC ECB CFB等，关于加密算法的模式请参照https://my.oschina.net/ashnah/blog/870509
+
+
+
+## [PGP加密函数：](https://my.oschina.net/ashnah/blog/870509)
+
+PGP加密函数 实现了部分OpenPGP (RFC 4880)标准，提供了对称秘钥和公共秘钥的加密函数，
+
+把对称秘钥和公钥/私钥相结合，提高数据的安全性。
+
+
+
+### 使用公钥/私钥的加密/解密函数
+
+函数原型：
+
+```
+pgp_pub_encrypt(data text, key bytea [, options text ]) returns bytea
+pgp_pub_encrypt_bytea(data bytea, key bytea [, options text ]) returns bytea
+pgp_pub_decrypt(msg bytea, key bytea [, psw text [, options text ]]) returns text
+pgp_pub_decrypt_bytea(msg bytea, key bytea [, psw text [, options text ]]) returns bytea
+```
+
+参数：
+
+key :公钥/私钥
+
+psw:私钥的密码
+
+options：一些可选的加密参数，形式如下：
+
+```
+pgp_pub_encrypt(data, psw, 'compress-algo=1, cipher-algo=aes256')
+```
+
+可选的参数：
+
+cipher-algo：使用的加密算法，取值: bf, aes128, aes192, aes256,cast5
+
+compress-algo：使用的压缩算法，取值 0,1(zib),2(zlib)
+
+compress-level：压缩级别(0~9)
+
+convert-crlf：在加密时是否将\n转换为\r\n、在解密时是否将 \r\n转换为\n (0,1)
+
+disable-mdc:为了与老版本PGP产品兼容
+
+unicode-mode:是否把文本数据从数据库内部编码转换到UTF-8
+
+
+
+#### 使用公钥/私钥进行加解密的原理如下：
+
+使用公钥加密：
+
+![image-20200922222506540](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222506540.png)
+
+加密时随机产生一个sessionkey(会话秘钥，是一个对称密钥)，并用这个sessionkey加密数据，形成数据包；之后使用公钥加密sessionkey形成会话秘钥包；数据包和会话秘钥包共同构成加密信息。
+
+使用私钥解密：
+
+![image-20200922222701338](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222701338.png)
+
+
+
+使用私钥解密会话秘钥包中的信息，得到sessionkey;使用sessionkey解密数据包中的内容，得到明文。
+
+
+
+##  
+
+
+
+### 使用对称密钥的加密/解密函数
+
+函数原型：
+
+```
+pgp_sym_encrypt(data text, key text [, options text ]) returns bytea
+pgp_sym_encrypt_bytea(data bytea, key text [, options text ]) returns bytea
+pgp_sym_decrypt(msg bytea, key text [, options text ]) returns text
+pgp_sym_decrypt_bytea(msg bytea, key text [, options text ]) returns bytea
+```
+
+参数：
+
+key:对称秘钥，加密解密时相同
+
+options：一些加密的参数，形式和使用 公钥/私钥的函数相同，可选的参数 比使用公钥/私钥的函数多了以下几个：
+
+ sess-key: 1：使用随机生成的会话秘钥，0：使用s2k秘钥作为会话秘钥
+
+ s2k-mode: s2k过程中 是否使用salt、散列次数
+
+ s2k-digest-algo:s2k过程使用的算法
+
+ s2k-cipher-algo:随机生成的会话秘钥的加密方法
+
+下面通过加解密过程的原理图说明以上参数的使用：
+
+
+
+#### 使用对称密钥进行加解密的原理如下：
+
+s2k key的生成：
+
+![image-20200922222736450](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222736450.png)
+
+把对称秘钥 使用s2k-mode、 s2k-digest-algo指定的信息进行hash运算，得到s2k key.
+
+sess-key=0时，使用s2k key作为会话秘钥
+
+加密：
+
+![image-20200922222815854](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222815854.png)
+
+使用s2k key作为会话秘钥对明文进行加密，并把生成s2k key的相关信息放入会话秘钥包
+
+解密：
+
+![image-20200922222836404](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222836404.png)
+
+解密时，首先根据会话秘钥包中的s2k info 生成s2k key，再使用s2k key解密密文。
+
+ 
+
+sess-key=1时，使用随机生成的sessionkey
+
+加密：
+
+![image-20200922222857169](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222857169.png)
+
+随机生成sessionkey 对明文进行加密，s2k key对sessionkey进行加密，并把sessionkey密文和生成s2k key的信息一起形成会话秘钥包
+
+解密：
+
+![image-20200922222921060](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222921060.png)
+
+解密时，首先根据会话秘钥包中的s2k info 生成s2k key，再使用s2k key解密会话秘钥包中的sessionkey
+
+最后使用sessionkey解密数据。
+
+ 
+
+PGP函数使用举例：
+
+```
+使用公钥/私钥：
+由于秘钥太长，事先把秘钥放到table keytbl中,pubkey字段表示公钥，seckey字段表示私钥
+select pgp_pub_decrypt( pgp_pub_encrypt('Secret msg', dearmor(pubkey), 'cipher-algo=aes192'),
+dearmor(seckey),'123456789')
+from keytbl where keytbl.id=1;
+ pgp_pub_decrypt 
+-----------------
+ Secret msg
+(1 row)
+
+
+使用对称秘钥：
+select pgp_sym_encrypt('Secret.', 'key', 'cipher-algo=aes192');
+                                                                   pgp_sym_encrypt                                                                    
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ \xc30d04080302bf1d74533d338175d9de66628c441ab1efda51a047b86652e296821a22e59b99f395e5582ae90d724c2f86ed23801525b8f0c58e9fa24e25e9f342eee3156f38f45b2b
+(1 row)
+Select pgp_sym_decrypt('\xc30d04080302bf1d74533d3381756ed23801525b8f0c58e9fa24e25e9f342eee3156f38f45b2bd9de66628c441ab1efda51a047b86652e296821a22e59b99f395e5582ae90d724c2f8','key');
+ pgp_sym_decrypt 
+-----------------
+ Secret.
+(1 row)
+```
+
+ 
+
+
+
+
+
+
+
+# [对称加密算法的模式介绍](https://my.oschina.net/ashnah/blog/870509)
+
+
+
+对称加密算法都会使用加密模式，比如 cbc模式 ecb 模式等。本文介绍四种常见的加密模式：ECB、CBC、CFB、OFB。
+
+
+
+## 电子密码本模式  Electronic Code Book(ECB)：
+
+原理如下图：
+
+![image-20200922222957808](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922222957808.png)
+
+明文被分成等长的小块(长度取决于加密算法的加密单位)、每一块使用秘钥单独加密成密文，小块之间相互独立。
+
+**优点:**
+
+1.简单；
+
+2.每个加密块相互独立，没有依赖关系，有利于并行计算，且 误差不会被传送
+
+**缺点:**
+
+不安全，易破解。
+
+
+
+## 加密块链模式 Cipher Block Chaining(CBC):
+
+原理如下图：
+
+![image-20200922223020151](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922223020151.png)
+
+将明文分成固定长度,将前面一个加密块输出的密文与下一个要加密的明文块进行XOR（异或）操作计算，将计算结果再用密钥进行加密得到密文
+
+第一明文块加密的时候，因为前面没有加密的密文，所以需要一个初始化向量（IV）
+
+**优点：**
+
+1.不容易主动攻击,安全性好于ECB,适合传输长度长的报文。
+
+**缺点：**
+
+1.每个加密块依赖于前一个加密快，不利于并行计算；且若有误差，影响后面的块，即误差传递；
+
+2.需要初始化向量IV
+
+
+
+## 加密反馈模式 Cipher Feedback Mode(CFB)：
+
+原理如下图：
+
+![image-20200922223042243](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922223042243.png)
+
+用一个length位的位移寄存器(length 为加密算法的加密单位),每次处理n位的数据(n通常为8，一字节)，加密过程是对位移寄存器进行加密。
+
+使用加密后的位移寄存器的高n位与n位明文加密的密文块，再使用密文填充寄存器，重复这个过程。
+
+ **优点：**
+
+1.分组密码转化为流模式;
+
+2.可以及时加密传送小于分组的数据;
+
+**缺点:**
+
+1.不利于并行计算;
+
+2.误差传送：一个明文单元损坏影响多个单元;
+
+3.需要IV;
+
+
+
+## 输出反馈模式  Output Feedback Mode(OFB)：
+
+原理如下图：
+
+![image-20200922223105489](C:\Users\Imaxl\AppData\Roaming\Typora\typora-user-images\image-20200922223105489.png)
+
+ 
+
+用一个length位的位移寄存器(length 为加密算法的加密单位),每次处理n位的数据(n通常为8，一字节)，加密过程是对位移寄存器进行加密。
+
+使用加密后的位移寄存器的高n位与n位明文加密的密文块，再使用位移寄存器加密结果高n位移至最后，填充寄存器，重复这个过程。
+
+ **优点:**
+
+1.分组密码转化为流模式;
+
+2.可以及时加密传送小于分组的数据;
+
+3.每个加密快都是与位移寄存器异或计算，相互之间没有依赖关系，避免的误差传送。
+
+**缺点:**
+
+不利于并行计算;
